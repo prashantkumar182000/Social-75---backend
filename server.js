@@ -9,6 +9,10 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+app.listen(PORT, '0.0.0.0', () => {  // Add '0.0.0.0' as the host
+  console.log(`Server is running on http://0.0.0.0:${PORT}`);
+});
+
 // MongoDB connection string
 const mongoUri = process.env.MONGO_URI || 'mongodb+srv://prashantkumar182000:pk00712345@cluster0.tehdo.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0&tls=true&tlsAllowInvalidCertificates=true';
 const dbName = 'chatApp'; // Database name
@@ -114,6 +118,10 @@ const refreshNGOData = async () => {
     console.error('NGO refresh failed:', err);
   }
 };
+
+app.get('/api/health', (req, res) => {
+  res.status(200).json({ status: 'OK' });
+});
 
 // Endpoint to fetch map data
 app.get('/api/map', async (req, res) => {

@@ -14,6 +14,9 @@ const mongoUri = process.env.MONGO_URI || 'mongodb+srv://prashantkumar182000:pk0
 const dbName = 'chatApp'; // Database name
 const collectionName = 'messages'; // Collection name
 
+app.use(express.json()); // Parse JSON bodies
+app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
+
 app.use(cors({
   origin: ['http://localhost:5173', 'https://socio-99-frontend.vercel.app'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
@@ -157,26 +160,45 @@ app.post('/api/map', async (req, res) => {
 
 // Pusher endpoint for sending messages
 app.post('/api/send-message', async (req, res) => {
-  const message = req.body;
-  console.log('Received message:', message);
-
-  // Save message to MongoDB
-  try {
-    await db.collection(collectionName).insertOne(message);
-    console.log('Message saved to MongoDB');
-  } catch (err) {
-    console.error('Failed to save message to MongoDB:', err);
-    return res.status(500).json({ success: false, message: 'Failed to save message' });
+  // Add validation
+  if (!req.body || !req.body.text || !req.body.user) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'Missing required fields: text and user' 
+    });
   }
 
-  // Trigger a 'message' event on the 'chat' channel
-  pusher.trigger('chat', 'message', message, (err) => {
-    if (err) {
-      console.error('Pusher trigger error:', err);
-      return res.status(500).json({ success: false, message: 'Failed to send message' });
-    }
-    res.status(200).json({ success: true, message: 'Message sent' });
-  });
+  const message = {
+    text: req.body.text,
+    user: req.body.user,
+    timestamp: new Date().toISOString() // Add server-side timestamp
+  };
+
+  try {
+    const result = await db.collection(collectionName).insertOne(message);
+    console.log('Message saved with ID:', result.insertedId);
+    
+    pusher.trigger('chat', 'message', message, (err) => {
+      if (err) {
+        console.error('Pusher error:', err);
+        return res.status(500).json({ 
+          success: false, 
+          message: 'Message saved but Pusher failed' 
+        });
+      }
+      res.status(200).json({ 
+        success: true, 
+        message: 'Message sent',
+        id: result.insertedId 
+      });
+    });
+  } catch (err) {
+    console.error('Database error:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Database operation failed' 
+    });
+  }
 });
 
 // Endpoint to fetch all messages

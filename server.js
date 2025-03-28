@@ -9,10 +9,6 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-app.listen(PORT, '0.0.0.0', () => {  // Add '0.0.0.0' as the host
-  console.log(`Server is running on http://0.0.0.0:${PORT}`);
-});
-
 // MongoDB connection string
 const mongoUri = process.env.MONGO_URI || 'mongodb+srv://prashantkumar182000:pk00712345@cluster0.tehdo.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0&tls=true&tlsAllowInvalidCertificates=true';
 const dbName = 'chatApp'; // Database name
@@ -217,17 +213,24 @@ app.get('/api/action-hub', async (req, res) => {
 
 // Start the server and initialize data
 const startServer = async () => {
-  await connectToMongoDB();
-  await fetchTEDTalks(); // Initial TED Talks fetch
-  await refreshNGOData(); // Initial NGO data fetch
+  try {
+    await connectToMongoDB();
+    await fetchTEDTalks();
+    await refreshNGOData();
 
-  // Schedule periodic refreshes
-  setInterval(fetchTEDTalks, 3600000); // Refresh TED Talks every hour
-  setInterval(refreshNGOData, 3600000); // Refresh NGO data every hour
+    setInterval(fetchTEDTalks, 3600000);
+    setInterval(refreshNGOData, 3600000);
 
-  app.listen(PORT, () => {
-    console.log(`Server is running on http://localhost:${PORT}`);
-  });
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Server is running on http://0.0.0.0:${PORT}`);
+    }).on('error', (err) => {
+      console.error('Server error:', err);
+      process.exit(1); // Exit if port is in use
+    });
+  } catch (err) {
+    console.error('Startup error:', err);
+    process.exit(1);
+  }
 };
 
 // Start the server

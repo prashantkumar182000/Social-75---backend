@@ -15,7 +15,7 @@ const dbName = 'chatApp'; // Database name
 const collectionName = 'messages'; // Collection name
 
 // Allow all origins and methods for testing
-app.use(cors({ origin: 'http://localhost:5173', methods: ['GET', 'POST', 'OPTIONS'] }));
+app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] }));
 app.use(bodyParser.json());
 
 // Initialize Pusher

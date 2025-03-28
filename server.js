@@ -14,9 +14,10 @@ const mongoUri = process.env.MONGO_URI || 'mongodb+srv://prashantkumar182000:pk0
 const dbName = 'chatApp'; // Database name
 const collectionName = 'messages'; // Collection name
 
-// Allow all origins and methods for testing
-app.use(cors({ origin: '*', methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'] }));
-app.use(bodyParser.json());
+app.use(cors({
+  origin: ['http://localhost:5173', 'https://social-75.vercel.app'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+}));
 
 // Initialize Pusher
 const pusher = new Pusher({

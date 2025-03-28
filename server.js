@@ -19,7 +19,9 @@ app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
 
 app.use(cors({
   origin: ['http://localhost:5173', 'https://socio-99-frontend.vercel.app'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true  // Add this line
 }));
 
 // Initialize Pusher

@@ -15,7 +15,7 @@ const dbName = 'chatApp'; // Database name
 const collectionName = 'messages'; // Collection name
 
 app.use(cors({
-  origin: ['http://localhost:5173', 'https://social-75.vercel.app'],
+  origin: ['http://localhost:5173', 'https://socio-99-frontend.vercel.app/'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
 }));
 

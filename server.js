@@ -18,7 +18,7 @@ app.use(express.json()); // Parse JSON bodies
 app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
 
 app.use(cors({
-  origin: ['http://localhost:5173', 'https://socio-99-frontend.vercel.app', 'https://magical-kringle-33d6ad.netlify.app/'],
+  origin: ['http://localhost:5173', 'https://socio-99-frontend.vercel.app', 'https://social-75.vercel.app/'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true  // Add this line

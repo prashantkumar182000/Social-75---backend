@@ -1,4 +1,4 @@
-# 🔧 Social 75 - Backend
+# 🔧 Social 75 - Backend [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 [![Render Deployment](https://img.shields.io/badge/Deployed%20on-Render-46d3ff?style=for-the-badge)](https://socio-99.onrender.com)
 [![Node.js](https://img.shields.io/badge/Node.js-18-green?style=for-the-badge&logo=node.js)](https://nodejs.org/)

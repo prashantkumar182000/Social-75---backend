@@ -54,7 +54,7 @@ const connectToMongoDB = async () => {
 };
 
 // TED Talks API Configuration
-const TED_API_KEY = process.env.TED_API_KEY || '3eedcb7125msh831bd170f195487p1db794jsnf0fb8e05feff'; // Your RapidAPI key
+const TED_API_KEY = process.env.TED_API_KEY || '12a5ce8dcamshf1e298383db9dd5p1d32bfjsne685c7209647'; // Your RapidAPI key
 const TED_API_HOST = process.env.TED_API_HOST || 'ted-talks-api.p.rapidapi.com';
 
 // Fetch TED Talks data

@@ -4,6 +4,9 @@ const cors = require('cors');
 const { MongoClient, ObjectId } = require('mongodb');
 const Pusher = require('pusher');
 const axios = require('axios');
+const natural = require('natural');
+const { WordTokenizer, PorterStemmer } = natural;
+const tf = require('@tensorflow/tfjs-node');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -49,6 +52,9 @@ const connectToMongoDB = async () => {
     await db.collection('connections').createIndex({ connectedUserId: 1 });
     await db.collection('messages').createIndex({ channel: 1, timestamp: 1 });
     await db.collection('messages').createIndex({ replyTo: 1 });
+    await db.collection('userPassions').createIndex({ userId: 1 });
+    await db.collection('passionQuestions').createIndex({ id: 1 });
+    await db.collection('passionProfiles').createIndex({ tags: 1 });
     
   } catch (err) {
     console.error('MongoDB connection failed:', err);
@@ -56,62 +62,300 @@ const connectToMongoDB = async () => {
   }
 };
 
-// ================== ENHANCED CHAT ENDPOINTS ================== //
+// ================== PASSION FINDER ENDPOINTS ================== //
 
-// Get messages by channel
-app.get('/api/messages', async (req, res) => {
+// Pre-loaded passion questions
+const DEFAULT_PASSION_QUESTIONS = [
+  {
+    id: 1,
+    text: "When you have free time, you're most likely to...",
+    options: [
+      { text: "Read books/articles", tags: ["education", "research"] },
+      { text: "Volunteer locally", tags: ["community", "social"] },
+      { text: "Watch documentaries", tags: ["awareness", "global"] },
+      { text: "Organize events", tags: ["leadership", "activism"] }
+    ]
+  },
+  {
+    id: 2,
+    text: "Which global issue concerns you most?",
+    options: [
+      { text: "Climate change", tags: ["environment", "sustainability"] },
+      { text: "Education inequality", tags: ["education", "children"] },
+      { text: "Human rights", tags: ["social", "justice"] },
+      { text: "Public health", tags: ["health", "medicine"] }
+    ]
+  },
+  {
+    id: 3,
+    text: "Your ideal vacation involves...",
+    options: [
+      { text: "Learning a new skill", tags: ["growth", "workshops"] },
+      { text: "Helping a community", tags: ["service", "ngos"] },
+      { text: "Exploring nature", tags: ["environment", "outdoors"] },
+      { text: "Meeting activists", tags: ["networking", "change-makers"] }
+    ]
+  }
+];
+
+// Pre-loaded passion profiles
+const DEFAULT_PASSION_PROFILES = [
+  {
+    id: "env-001",
+    title: "Environmental Activist",
+    subtitle: "For planet protectors and sustainability champions",
+    description: "Your responses show strong alignment with environmental causes. You likely feel deeply connected to nature and are concerned about climate change, pollution, and biodiversity loss.",
+    category: "environment",
+    tags: ["environment", "sustainability", "climate", "nature"],
+    resources: [
+      {
+        type: "TED Talk",
+        title: "The disarming case to act right now on climate change",
+        link: "https://www.ted.com/talks/greta_thunberg_the_disarming_case_to_act_right_now_on_climate_change",
+        image: "https://pi.tedcdn.com/r/talkstar-photos.s3.amazonaws.com/uploads/72bda89f-9bbf-4685-910a-2f151c25f0a9/GretaThunberg_2019T-embed.jpg?"
+      },
+      {
+        type: "Course",
+        title: "Environmental Science and Sustainability",
+        link: "https://www.coursera.org/learn/environmental-science",
+        image: "https://d3njjcbhbojbot.cloudfront.net/api/utilities/v1/imageproxy/https://s3.amazonaws.com/coursera-course-photos/0d/c0c55059a411e8a1a4a59cf2d6a88a/Environmental_Science.jpg"
+      }
+    ],
+    actions: [
+      { text: "Join the next global climate strike", link: "https://fridaysforfuture.org" },
+      { text: "Calculate your carbon footprint", link: "https://www.carbonfootprint.com/calculator.aspx" },
+      { text: "Start a recycling program in your community", link: "" }
+    ]
+  },
+  {
+    id: "edu-001",
+    title: "Education Reformer",
+    subtitle: "For those passionate about learning equity",
+    description: "Your responses indicate a strong passion for education and knowledge sharing. You likely believe education is a fundamental human right and want to make learning accessible to all.",
+    category: "education",
+    tags: ["education", "children", "learning", "equity"],
+    resources: [
+      {
+        type: "Documentary",
+        title: "Waiting for Superman",
+        link: "https://www.imdb.com/title/tt1566648/",
+        image: "https://m.media-amazon.com/images/M/MV5BMTM0NDQxMjI0OV5BMl5BanBnXkFtZTcwNzQzMjg3Mw@@._V1_.jpg"
+      },
+      {
+        type: "Book",
+        title: "The End of Education by Neil Postman",
+        link: "https://www.goodreads.com/book/show/25350.The_End_of_Education",
+        image: "https://i.gr-assets.com/images/S/compressed.photo.goodreads.com/books/1386924445l/25350.jpg"
+      }
+    ],
+    actions: [
+      { text: "Volunteer as an online tutor", link: "https://www.volunteermatch.org/search/opp3563734.jsp" },
+      { text: "Donate school supplies to underfunded schools", link: "https://www.donorschoose.org" },
+      { text: "Advocate for education policy reform", link: "" }
+    ]
+  }
+];
+
+// Initialize passion data in MongoDB
+const initializePassionData = async () => {
   try {
-    const { channel = 'general' } = req.query;
-    const messages = await db.collection('messages')
-      .find({ channel })
-      .sort({ timestamp: 1 })
-      .toArray();
-    
-    // Structure replies as nested
-    const messagesWithReplies = messages.filter(m => !m.replyTo);
-    for (const message of messagesWithReplies) {
-      message.replies = messages.filter(m => m.replyTo?.toString() === message._id.toString());
+    // Check if questions exist
+    const questionsCount = await db.collection('passionQuestions').countDocuments();
+    if (questionsCount === 0) {
+      await db.collection('passionQuestions').insertMany(DEFAULT_PASSION_QUESTIONS);
+      console.log('Loaded default passion questions');
     }
 
-    res.status(200).json(messagesWithReplies);
+    // Check if profiles exist
+    const profilesCount = await db.collection('passionProfiles').countDocuments();
+    if (profilesCount === 0) {
+      await db.collection('passionProfiles').insertMany(DEFAULT_PASSION_PROFILES);
+      console.log('Loaded default passion profiles');
+    }
   } catch (err) {
-    res.status(500).json({ success: false, message: 'Failed to fetch messages' });
+    console.error('Error initializing passion data:', err);
+  }
+};
+
+// Get passion questions
+app.get('/api/passion-questions', async (req, res) => {
+  try {
+    const questions = await db.collection('passionQuestions').find().toArray();
+    res.status(200).json(questions.length ? questions : DEFAULT_PASSION_QUESTIONS);
+  } catch (err) {
+    console.error('Error fetching questions:', err);
+    res.status(200).json(DEFAULT_PASSION_QUESTIONS);
   }
 });
 
-// Send message (with channel and reply support)
-app.post('/api/send-message', async (req, res) => {
+// Get specific passion profile
+app.get('/api/passion-data/:id', async (req, res) => {
   try {
-    const { text, user, channel = 'general', replyTo } = req.body;
-    
-    const message = {
-      text,
-      user: {
-        uid: user.uid,
-        name: user.name || user.email.split('@')[0],
-        avatar: user.avatar || ''
-      },
-      channel,
-      replyTo: replyTo ? new ObjectId(replyTo) : null,
-      timestamp: new Date().toISOString()
-    };
-
-    const result = await db.collection('messages').insertOne(message);
-    const insertedMessage = { ...message, _id: result.insertedId };
-
-    // Trigger Pusher event for real-time update
-    pusher.trigger(`chat-${channel}`, 'new-message', insertedMessage);
-
-    res.status(200).json({ 
-      success: true, 
-      message: insertedMessage 
+    const profile = await db.collection('passionProfiles').findOne({
+      $or: [
+        { id: req.params.id },
+        { category: req.params.id }
+      ]
     });
+
+    if (profile) {
+      res.status(200).json(profile);
+    } else {
+      // Fallback to environmental activism if not found
+      const fallback = await db.collection('passionProfiles').findOne({
+        category: 'environment'
+      }) || DEFAULT_PASSION_PROFILES[0];
+      res.status(200).json(fallback);
+    }
   } catch (err) {
-    console.error('Error sending message:', err);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Failed to send message' 
+    console.error('Error fetching passion profile:', err);
+    res.status(200).json(DEFAULT_PASSION_PROFILES[0]);
+  }
+});
+
+// AI-powered passion analysis
+app.post('/api/analyze-passion', async (req, res) => {
+  try {
+    const { responses } = req.body;
+    
+    // Step 1: Basic tag frequency analysis
+    const tagFrequency = responses.reduce((acc, tag) => {
+      acc[tag] = (acc[tag] || 0) + 1;
+      return acc;
+    }, {});
+
+    // Step 2: Find most common tags
+    const sortedTags = Object.entries(tagFrequency)
+      .sort((a, b) => b[1] - a[1])
+      .map(([tag]) => tag);
+
+ // Step 3: Find best matching profile
+try {
+  const profiles = await db.collection('passionProfiles').find().toArray();
+  
+  if (!profiles || !Array.isArray(profiles) || profiles.length === 0) {
+    console.error('No passion profiles found in database');
+    throw new Error('No passion profiles available');
+  }
+
+  let bestMatch = null;
+  let highestScore = 0;
+
+  profiles.forEach(profile => {
+    if (!profile.tags || !Array.isArray(profile.tags)) {
+      console.warn(`Invalid tags array for profile ${profile.id}`);
+      return; // Skip this profile
+    }
+
+    const score = profile.tags.reduce((sum, tag) => {
+      // Ensure tag is a string and exists in frequency map
+      if (typeof tag !== 'string') {
+        console.warn(`Invalid tag type in profile ${profile.id}`);
+        return sum;
+      }
+      return sum + (sortedTags.includes(tag) ? (tagFrequency[tag] || 0) : 0);
+    }, 0);
+
+    if (score > highestScore || (score === highestScore && !bestMatch)) {
+      highestScore = score;
+      bestMatch = profile;
+    }
+  });
+
+  if (!bestMatch) {
+    console.error('No matching profile found, using fallback');
+    bestMatch = profiles[0]; // Fallback to first profile
+  }
+} catch (err) {
+  console.error('Error in profile matching:', err);
+  // Fallback to environmental profile
+  bestMatch = await db.collection('passionProfiles').findOne({ category: 'environment' }) || 
+              DEFAULT_PASSION_PROFILES[0];
+}
+
+    // Step 4: Return best match or default
+    const result = bestMatch || 
+      await db.collection('passionProfiles').findOne({ category: 'environment' }) || 
+      DEFAULT_PASSION_PROFILES[0];
+
+    // Step 5: Save analytics (optional)
+    await db.collection('passionAnalytics').insertOne({
+      tags: sortedTags,
+      matchedProfile: result.id,
+      timestamp: new Date()
     });
+
+    res.status(200).json(result);
+  } catch (err) {
+    console.error('AI analysis failed:', err);
+    
+    // Fallback to simple tag matching
+    const tagFrequency = responses.reduce((acc, tag) => {
+      acc[tag] = (acc[tag] || 0) + 1;
+      return acc;
+    }, {});
+
+    const topTag = Object.entries(tagFrequency)
+      .sort((a, b) => b[1] - a[1])[0][0];
+
+    const fallback = await db.collection('passionProfiles').findOne({
+      tags: topTag
+    }) || DEFAULT_PASSION_PROFILES[0];
+
+    res.status(200).json(fallback);
+  }
+});
+
+// Save user's passion results
+app.post('/api/save-passion', async (req, res) => {
+  try {
+    const { userId, passionId, tags } = req.body;
+    
+    await db.collection('userPassions').updateOne(
+      { userId },
+      { $set: { 
+        userId,
+        passionId, 
+        tags,
+        updatedAt: new Date() 
+      }},
+      { upsert: true }
+    );
+
+    // Update user profile if exists
+    await db.collection('users').updateOne(
+      { _id: new ObjectId(userId) },
+      { $set: { 
+        primaryPassion: passionId,
+        lastPassionUpdate: new Date()
+      }}
+    );
+
+    res.status(200).json({ success: true });
+  } catch (err) {
+    console.error('Error saving passion:', err);
+    res.status(500).json({ success: false, error: "Failed to save results" });
+  }
+});
+
+// Get user's saved passion
+app.get('/api/user-passion/:userId', async (req, res) => {
+  try {
+    const result = await db.collection('userPassions').findOne({ 
+      userId: req.params.userId 
+    });
+
+    if (result) {
+      const profile = await db.collection('passionProfiles').findOne({
+        id: result.passionId
+      });
+      res.status(200).json({ ...result, profile });
+    } else {
+      res.status(404).json({ success: false, message: "No passion results saved" });
+    }
+  } catch (err) {
+    console.error('Error fetching user passion:', err);
+    res.status(500).json({ success: false, error: "Failed to fetch results" });
   }
 });
 
@@ -276,13 +520,14 @@ app.get('/api/action-hub', async (req, res) => {
   }
 });
 
-// Data refresh functions (unchanged)
+// ================== DATA REFRESH FUNCTIONS ================== //
+
 const refreshTEDTalks = async () => {
   try {
     const response = await axios.get('https://ted-talks-api.p.rapidapi.com/talks', {
       headers: {
-        'x-rapidapi-key': TED_API_KEY,
-        'x-rapidapi-host': TED_API_HOST
+        'x-rapidapi-key': process.env.TED_API_KEY || '12a5ce8dcamshf1e298383db9dd5p1d32bfjsne685c7209647',
+        'x-rapidapi-host': process.env.TED_API_HOST || 'ted-talks-api.p.rapidapi.com'
       },
       params: {
         from_record_date: '2017-01-01',
@@ -335,6 +580,9 @@ const refreshNGOs = async () => {
 // Server startup
 const startServer = async () => {
   await connectToMongoDB();
+  
+  // Initialize passion data
+  await initializePassionData();
   
   // Initial data load
   await Promise.all([refreshTEDTalks(), refreshNGOs()]);

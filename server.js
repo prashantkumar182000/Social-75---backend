@@ -284,11 +284,28 @@ app.post('/api/analyze-passion', async (req, res) => {
 });
 
 // Save user's passion results
+// Save user's passion results
 app.post('/api/save-passion', async (req, res) => {
   try {
     const { userId, passionId, tags } = req.body;
     
-    await db.collection('userPassions').updateOne(
+    // Validate required fields
+    if (!userId || !passionId || !tags) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Missing required fields' 
+      });
+    }
+
+    // Convert to ObjectId if needed
+    let userObjectId;
+    try {
+      userObjectId = new ObjectId(userId);
+    } catch {
+      userObjectId = userId; // Fallback to string if not valid ObjectId
+    }
+
+    const result = await db.collection('userPassions').updateOne(
       { userId },
       { $set: { 
         userId,
@@ -299,19 +316,19 @@ app.post('/api/save-passion', async (req, res) => {
       { upsert: true }
     );
 
-    // Update user profile if exists
-    await db.collection('users').updateOne(
-      { _id: new ObjectId(userId) },
-      { $set: { 
-        primaryPassion: passionId,
-        lastPassionUpdate: new Date()
-      }}
-    );
+    // Verify the operation was successful
+    if (result.acknowledged) {
+      return res.status(200).json({ success: true });
+    } else {
+      throw new Error('Database operation not acknowledged');
+    }
 
-    res.status(200).json({ success: true });
   } catch (err) {
-    console.error('Error saving passion:', err);
-    res.status(500).json({ success: false, error: "Failed to save results" });
+    console.error('Save passion error:', err);
+    res.status(500).json({ 
+      success: false, 
+      error: err.message || 'Database save failed' 
+    });
   }
 });
 

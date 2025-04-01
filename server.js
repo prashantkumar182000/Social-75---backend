@@ -47,7 +47,8 @@ const connectToMongoDB = async () => {
     await db.collection('mapData').createIndex({ location: '2dsphere' });
     await db.collection('connections').createIndex({ userId: 1 });
     await db.collection('connections').createIndex({ connectedUserId: 1 });
-    await db.collection('messages').createIndex({ timestamp: 1 });
+    await db.collection('messages').createIndex({ channel: 1, timestamp: 1 });
+    await db.collection('messages').createIndex({ replyTo: 1 });
     
   } catch (err) {
     console.error('MongoDB connection failed:', err);
@@ -55,7 +56,68 @@ const connectToMongoDB = async () => {
   }
 };
 
-// API endpoints
+// ================== ENHANCED CHAT ENDPOINTS ================== //
+
+// Get messages by channel
+app.get('/api/messages', async (req, res) => {
+  try {
+    const { channel = 'general' } = req.query;
+    const messages = await db.collection('messages')
+      .find({ channel })
+      .sort({ timestamp: 1 })
+      .toArray();
+    
+    // Structure replies as nested
+    const messagesWithReplies = messages.filter(m => !m.replyTo);
+    for (const message of messagesWithReplies) {
+      message.replies = messages.filter(m => m.replyTo?.toString() === message._id.toString());
+    }
+
+    res.status(200).json(messagesWithReplies);
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Failed to fetch messages' });
+  }
+});
+
+// Send message (with channel and reply support)
+app.post('/api/send-message', async (req, res) => {
+  try {
+    const { text, user, channel = 'general', replyTo } = req.body;
+    
+    const message = {
+      text,
+      user: {
+        uid: user.uid,
+        name: user.name || user.email.split('@')[0],
+        avatar: user.avatar || ''
+      },
+      channel,
+      replyTo: replyTo ? new ObjectId(replyTo) : null,
+      timestamp: new Date().toISOString()
+    };
+
+    const result = await db.collection('messages').insertOne(message);
+    const insertedMessage = { ...message, _id: result.insertedId };
+
+    // Trigger Pusher event for real-time update
+    pusher.trigger(`chat-${channel}`, 'new-message', insertedMessage);
+
+    res.status(200).json({ 
+      success: true, 
+      message: insertedMessage 
+    });
+  } catch (err) {
+    console.error('Error sending message:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to send message' 
+    });
+  }
+});
+
+// ================== EXISTING ENDPOINTS (UNCHANGED) ================== //
+
+// Health check
 app.get('/api/health', (req, res) => {
   res.status(200).json({ status: 'OK' });
 });
@@ -191,33 +253,6 @@ app.get('/api/users/:userId/connections', async (req, res) => {
   }
 });
 
-// Chat endpoints
-app.post('/api/send-message', async (req, res) => {
-  try {
-    const { text, user } = req.body;
-    const message = {
-      text,
-      user,
-      timestamp: new Date().toISOString()
-    };
-
-    const result = await db.collection('messages').insertOne(message);
-    pusher.trigger('chat', 'message', message);
-    res.status(200).json({ success: true, message: 'Message sent' });
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'Failed to send message' });
-  }
-});
-
-app.get('/api/messages', async (req, res) => {
-  try {
-    const messages = await db.collection('messages').find().toArray();
-    res.status(200).json(messages);
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'Failed to fetch messages' });
-  }
-});
-
 // Content endpoints
 const TED_API_KEY = process.env.TED_API_KEY || '12a5ce8dcamshf1e298383db9dd5p1d32bfjsne685c7209647';
 const TED_API_HOST = process.env.TED_API_HOST || 'ted-talks-api.p.rapidapi.com';
@@ -241,7 +276,7 @@ app.get('/api/action-hub', async (req, res) => {
   }
 });
 
-// Data refresh functions
+// Data refresh functions (unchanged)
 const refreshTEDTalks = async () => {
   try {
     const response = await axios.get('https://ted-talks-api.p.rapidapi.com/talks', {

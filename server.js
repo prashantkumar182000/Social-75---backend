@@ -5,7 +5,6 @@ const { MongoClient, ObjectId } = require('mongodb');
 const Pusher = require('pusher');
 const axios = require('axios');
 
-
 const app = express();
 const PORT = process.env.PORT || 10000;
 
@@ -45,11 +44,11 @@ const connectToMongoDB = async () => {
     db = client.db(dbName);
 
     // Create indexes
+    await db.collection('messages').createIndex({ channel: 1, timestamp: 1 });
+    await db.collection('messages').createIndex({ replyTo: 1 });
     await db.collection('mapData').createIndex({ location: '2dsphere' });
     await db.collection('connections').createIndex({ userId: 1 });
     await db.collection('connections').createIndex({ connectedUserId: 1 });
-    await db.collection('messages').createIndex({ channel: 1, timestamp: 1 });
-    await db.collection('messages').createIndex({ replyTo: 1 });
     await db.collection('userPassions').createIndex({ userId: 1 });
     await db.collection('passionQuestions').createIndex({ id: 1 });
     await db.collection('passionProfiles').createIndex({ tags: 1 });
@@ -60,9 +59,8 @@ const connectToMongoDB = async () => {
   }
 };
 
-// ================== PASSION FINDER ENDPOINTS ================== //
+// ================== PRE-LOADED DATA ================== //
 
-// Pre-loaded passion questions
 const DEFAULT_PASSION_QUESTIONS = [
   {
     id: 1,
@@ -96,7 +94,6 @@ const DEFAULT_PASSION_QUESTIONS = [
   }
 ];
 
-// Pre-loaded passion profiles
 const DEFAULT_PASSION_PROFILES = [
   {
     id: "env-001",
@@ -157,36 +154,88 @@ const DEFAULT_PASSION_PROFILES = [
 // Initialize passion data in MongoDB
 const initializePassionData = async () => {
   try {
-    // Check if questions exist
     const questionsCount = await db.collection('passionQuestions').countDocuments();
     if (questionsCount === 0) {
       await db.collection('passionQuestions').insertMany(DEFAULT_PASSION_QUESTIONS);
-      console.log('Loaded default passion questions');
     }
 
-    // Check if profiles exist
     const profilesCount = await db.collection('passionProfiles').countDocuments();
     if (profilesCount === 0) {
       await db.collection('passionProfiles').insertMany(DEFAULT_PASSION_PROFILES);
-      console.log('Loaded default passion profiles');
     }
   } catch (err) {
     console.error('Error initializing passion data:', err);
   }
 };
 
-// Get passion questions
+// ================== CHAT ENDPOINTS ================== //
+
+app.post('/api/pusher/auth', async (req, res) => {
+  try {
+    const auth = pusher.authenticate(req.body.socket_id, req.body.channel_name);
+    res.send(auth);
+  } catch (err) {
+    res.status(403).send('Forbidden');
+  }
+});
+
+app.get('/api/messages', async (req, res) => {
+  try {
+    const { channel } = req.query;
+    const query = channel ? { channel } : {};
+    
+    const messages = await db.collection('messages')
+      .find(query)
+      .sort({ timestamp: 1 })
+      .toArray();
+
+    res.status(200).json(messages);
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Failed to fetch messages' });
+  }
+});
+
+app.post('/api/messages', async (req, res) => {
+  try {
+    const { text, channel, user, replyTo } = req.body;
+    
+    if (!text || !channel || !user) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Missing required fields' 
+      });
+    }
+
+    const newMessage = {
+      text,
+      channel,
+      user,
+      replyTo: replyTo || null,
+      timestamp: new Date().toISOString()
+    };
+
+    const result = await db.collection('messages').insertOne(newMessage);
+    const insertedMessage = { ...newMessage, _id: result.insertedId };
+
+    pusher.trigger(`chat-${channel}`, 'new-message', insertedMessage);
+
+    res.status(201).json(insertedMessage);
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Failed to send message' });
+  }
+});
+
+// ================== PASSION FINDER ENDPOINTS ================== //
+
 app.get('/api/passion-questions', async (req, res) => {
   try {
     const questions = await db.collection('passionQuestions').find().toArray();
     res.status(200).json(questions.length ? questions : DEFAULT_PASSION_QUESTIONS);
   } catch (err) {
-    console.error('Error fetching questions:', err);
     res.status(200).json(DEFAULT_PASSION_QUESTIONS);
   }
 });
 
-// Get specific passion profile
 app.get('/api/passion-data/:id', async (req, res) => {
   try {
     const profile = await db.collection('passionProfiles').findOne({
@@ -195,28 +244,16 @@ app.get('/api/passion-data/:id', async (req, res) => {
         { category: req.params.id }
       ]
     });
-
-    if (profile) {
-      res.status(200).json(profile);
-    } else {
-      // Fallback to environmental activism if not found
-      const fallback = await db.collection('passionProfiles').findOne({
-        category: 'environment'
-      }) || DEFAULT_PASSION_PROFILES[0];
-      res.status(200).json(fallback);
-    }
+    res.status(200).json(profile || DEFAULT_PASSION_PROFILES[0]);
   } catch (err) {
-    console.error('Error fetching passion profile:', err);
     res.status(200).json(DEFAULT_PASSION_PROFILES[0]);
   }
 });
 
-// Optimized Passion Analysis Endpoint
 app.post('/api/analyze-passion', async (req, res) => {
   try {
     const { responses } = req.body;
     
-    // Validation
     if (!Array.isArray(responses)) {
       return res.status(400).json({ 
         success: false, 
@@ -224,20 +261,17 @@ app.post('/api/analyze-passion', async (req, res) => {
       });
     }
 
-    // Step 1: Tag frequency analysis (optimized)
     const tagFrequency = {};
     responses.forEach(tag => {
-      if (typeof tag === 'string') {  // Basic validation
+      if (typeof tag === 'string') {
         tagFrequency[tag] = (tagFrequency[tag] || 0) + 1;
       }
     });
 
-    // Step 2: Sort tags by frequency (optimized)
     const sortedTags = Object.keys(tagFrequency).sort(
       (a, b) => tagFrequency[b] - tagFrequency[a]
     );
 
-    // Step 3: Profile matching (optimized)
     const profiles = await db.collection('passionProfiles').find().toArray();
     
     let bestMatch = null;
@@ -257,52 +291,23 @@ app.post('/api/analyze-passion', async (req, res) => {
       }
     });
 
-    // Step 4: Determine result (with fallbacks)
-    const result = bestMatch || 
-      (await db.collection('passionProfiles').findOne()) || 
-      DEFAULT_PASSION_PROFILES[0];
+    const result = bestMatch || DEFAULT_PASSION_PROFILES[0];
 
-    // Step 5: Save analytics (fire-and-forget)
-    db.collection('passionAnalytics').insertOne({
-      tags: sortedTags,
-      matchedProfile: result.id,
-      timestamp: new Date()
-    }).catch(e => console.error('Analytics save failed:', e));
-
-    return res.status(200).json(result);
-
+    res.status(200).json(result);
   } catch (err) {
-    console.error('Passion analysis error:', err);
-    
-    // Ultra-light fallback
-    const fallback = DEFAULT_PASSION_PROFILES.find(p => 
-      p.category === 'environment'
-    ) || DEFAULT_PASSION_PROFILES[0];
-    
-    return res.status(200).json(fallback);
+    res.status(200).json(DEFAULT_PASSION_PROFILES[0]);
   }
 });
 
-// Save user's passion results
-// Save user's passion results
 app.post('/api/save-passion', async (req, res) => {
   try {
     const { userId, passionId, tags } = req.body;
     
-    // Validate required fields
     if (!userId || !passionId || !tags) {
       return res.status(400).json({ 
         success: false, 
         error: 'Missing required fields' 
       });
-    }
-
-    // Convert to ObjectId if needed
-    let userObjectId;
-    try {
-      userObjectId = new ObjectId(userId);
-    } catch {
-      userObjectId = userId; // Fallback to string if not valid ObjectId
     }
 
     const result = await db.collection('userPassions').updateOne(
@@ -316,23 +321,12 @@ app.post('/api/save-passion', async (req, res) => {
       { upsert: true }
     );
 
-    // Verify the operation was successful
-    if (result.acknowledged) {
-      return res.status(200).json({ success: true });
-    } else {
-      throw new Error('Database operation not acknowledged');
-    }
-
+    res.status(200).json({ success: result.acknowledged });
   } catch (err) {
-    console.error('Save passion error:', err);
-    res.status(500).json({ 
-      success: false, 
-      error: err.message || 'Database save failed' 
-    });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// Get user's saved passion
 app.get('/api/user-passion/:userId', async (req, res) => {
   try {
     const result = await db.collection('userPassions').findOne({ 
@@ -348,19 +342,12 @@ app.get('/api/user-passion/:userId', async (req, res) => {
       res.status(404).json({ success: false, message: "No passion results saved" });
     }
   } catch (err) {
-    console.error('Error fetching user passion:', err);
     res.status(500).json({ success: false, error: "Failed to fetch results" });
   }
 });
 
-// ================== EXISTING ENDPOINTS (UNCHANGED) ================== //
+// ================== MAP ENDPOINTS ================== //
 
-// Health check
-app.get('/api/health', (req, res) => {
-  res.status(200).json({ status: 'OK' });
-});
-
-// Map Data endpoints
 app.get('/api/map', async (req, res) => {
   try {
     const mapData = await db.collection('mapData').find().toArray();
@@ -386,7 +373,8 @@ app.post('/api/map', async (req, res) => {
   }
 });
 
-// Connection endpoints
+// ================== CONNECTION ENDPOINTS ================== //
+
 app.post('/api/connections', async (req, res) => {
   try {
     const { userId, connectedUserId } = req.body;
@@ -452,7 +440,6 @@ app.put('/api/connections/:id', async (req, res) => {
       { $set: updatedConnection }
     );
 
-    // Notify both users
     [connection.userId, connection.connectedUserId].forEach(userId => {
       pusher.trigger(`user-${userId}`, 'connection', {
         type: 'update',
@@ -468,53 +455,17 @@ app.put('/api/connections/:id', async (req, res) => {
 
 app.get('/api/users/:userId/connections', async (req, res) => {
   try {
-    const { userId } = req.params;
-    
     const connections = await db.collection('connections').find({
-      $or: [{ userId }, { connectedUserId: userId }]
+      $or: [{ userId: req.params.userId }, { connectedUserId: req.params.userId }]
     }).toArray();
 
-    // Enrich with user data
-    const enrichedConnections = await Promise.all(
-      connections.map(async conn => {
-        const [user, connectedUser] = await Promise.all([
-          db.collection('users').findOne({ _id: new ObjectId(conn.userId) }),
-          db.collection('users').findOne({ _id: new ObjectId(conn.connectedUserId) })
-        ]);
-        return { ...conn, user, connectedUser };
-      })
-    );
-
-    res.status(200).json(enrichedConnections);
+    res.status(200).json(connections);
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// Content endpoints
-const TED_API_KEY = process.env.TED_API_KEY || '12a5ce8dcamshf1e298383db9dd5p1d32bfjsne685c7209647';
-const TED_API_HOST = process.env.TED_API_HOST || 'ted-talks-api.p.rapidapi.com';
-
-app.get('/api/content', async (req, res) => {
-  try {
-    const talks = await db.collection('tedTalks').find().toArray();
-    res.status(200).json(talks);
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'Failed to fetch content' });
-  }
-});
-
-// NGO endpoints
-app.get('/api/action-hub', async (req, res) => {
-  try {
-    const ngos = await db.collection('ngos').find().toArray();
-    res.status(200).json(ngos);
-  } catch (err) {
-    res.status(500).json({ success: false, message: 'Failed to fetch NGOs' });
-  }
-});
-
-// ================== DATA REFRESH FUNCTIONS ================== //
+// ================== CONTENT ENDPOINTS ================== //
 
 const refreshTEDTalks = async () => {
   try {
@@ -548,6 +499,17 @@ const refreshTEDTalks = async () => {
   }
 };
 
+app.get('/api/content', async (req, res) => {
+  try {
+    const talks = await db.collection('tedTalks').find().toArray();
+    res.status(200).json(talks);
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Failed to fetch content' });
+  }
+});
+
+// ================== NGO ENDPOINTS ================== //
+
 const refreshNGOs = async () => {
   try {
     const response = await axios.get(
@@ -571,19 +533,24 @@ const refreshNGOs = async () => {
   }
 };
 
-// Server startup
+app.get('/api/action-hub', async (req, res) => {
+  try {
+    const ngos = await db.collection('ngos').find().toArray();
+    res.status(200).json(ngos);
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Failed to fetch NGOs' });
+  }
+});
+
+// ================== SERVER STARTUP ================== //
+
 const startServer = async () => {
   await connectToMongoDB();
-  
-  // Initialize passion data
   await initializePassionData();
-  
-  // Initial data load
   await Promise.all([refreshTEDTalks(), refreshNGOs()]);
   
-  // Scheduled refreshes
-  setInterval(refreshTEDTalks, 3600000); // 1 hour
-  setInterval(refreshNGOs, 3600000); // 1 hour
+  setInterval(refreshTEDTalks, 3600000);
+  setInterval(refreshNGOs, 3600000);
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);

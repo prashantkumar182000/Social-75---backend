@@ -4,9 +4,7 @@ const cors = require('cors');
 const { MongoClient, ObjectId } = require('mongodb');
 const Pusher = require('pusher');
 const axios = require('axios');
-const natural = require('natural');
-const { WordTokenizer, PorterStemmer } = natural;
-const tf = require('@tensorflow/tfjs-node');
+
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -213,96 +211,75 @@ app.get('/api/passion-data/:id', async (req, res) => {
   }
 });
 
-// AI-powered passion analysis
+// Optimized Passion Analysis Endpoint
 app.post('/api/analyze-passion', async (req, res) => {
   try {
     const { responses } = req.body;
     
-    // Step 1: Basic tag frequency analysis
-    const tagFrequency = responses.reduce((acc, tag) => {
-      acc[tag] = (acc[tag] || 0) + 1;
-      return acc;
-    }, {});
-
-    // Step 2: Find most common tags
-    const sortedTags = Object.entries(tagFrequency)
-      .sort((a, b) => b[1] - a[1])
-      .map(([tag]) => tag);
-
- // Step 3: Find best matching profile
-try {
-  const profiles = await db.collection('passionProfiles').find().toArray();
-  
-  if (!profiles || !Array.isArray(profiles) || profiles.length === 0) {
-    console.error('No passion profiles found in database');
-    throw new Error('No passion profiles available');
-  }
-
-  let bestMatch = null;
-  let highestScore = 0;
-
-  profiles.forEach(profile => {
-    if (!profile.tags || !Array.isArray(profile.tags)) {
-      console.warn(`Invalid tags array for profile ${profile.id}`);
-      return; // Skip this profile
+    // Validation
+    if (!Array.isArray(responses)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Invalid responses format' 
+      });
     }
 
-    const score = profile.tags.reduce((sum, tag) => {
-      // Ensure tag is a string and exists in frequency map
-      if (typeof tag !== 'string') {
-        console.warn(`Invalid tag type in profile ${profile.id}`);
-        return sum;
+    // Step 1: Tag frequency analysis (optimized)
+    const tagFrequency = {};
+    responses.forEach(tag => {
+      if (typeof tag === 'string') {  // Basic validation
+        tagFrequency[tag] = (tagFrequency[tag] || 0) + 1;
       }
-      return sum + (sortedTags.includes(tag) ? (tagFrequency[tag] || 0) : 0);
-    }, 0);
+    });
 
-    if (score > highestScore || (score === highestScore && !bestMatch)) {
-      highestScore = score;
-      bestMatch = profile;
-    }
-  });
+    // Step 2: Sort tags by frequency (optimized)
+    const sortedTags = Object.keys(tagFrequency).sort(
+      (a, b) => tagFrequency[b] - tagFrequency[a]
+    );
 
-  if (!bestMatch) {
-    console.error('No matching profile found, using fallback');
-    bestMatch = profiles[0]; // Fallback to first profile
-  }
-} catch (err) {
-  console.error('Error in profile matching:', err);
-  // Fallback to environmental profile
-  bestMatch = await db.collection('passionProfiles').findOne({ category: 'environment' }) || 
-              DEFAULT_PASSION_PROFILES[0];
-}
+    // Step 3: Profile matching (optimized)
+    const profiles = await db.collection('passionProfiles').find().toArray();
+    
+    let bestMatch = null;
+    let highestScore = -1;
 
-    // Step 4: Return best match or default
+    profiles.forEach(profile => {
+      if (!profile?.tags || !Array.isArray(profile.tags)) return;
+      
+      let score = 0;
+      profile.tags.forEach(tag => {
+        if (tagFrequency[tag]) score += tagFrequency[tag];
+      });
+
+      if (score > highestScore) {
+        highestScore = score;
+        bestMatch = profile;
+      }
+    });
+
+    // Step 4: Determine result (with fallbacks)
     const result = bestMatch || 
-      await db.collection('passionProfiles').findOne({ category: 'environment' }) || 
+      (await db.collection('passionProfiles').findOne()) || 
       DEFAULT_PASSION_PROFILES[0];
 
-    // Step 5: Save analytics (optional)
-    await db.collection('passionAnalytics').insertOne({
+    // Step 5: Save analytics (fire-and-forget)
+    db.collection('passionAnalytics').insertOne({
       tags: sortedTags,
       matchedProfile: result.id,
       timestamp: new Date()
-    });
+    }).catch(e => console.error('Analytics save failed:', e));
 
-    res.status(200).json(result);
+    return res.status(200).json(result);
+
   } catch (err) {
-    console.error('AI analysis failed:', err);
+    console.error('Passion analysis error:', err);
     
-    // Fallback to simple tag matching
-    const tagFrequency = responses.reduce((acc, tag) => {
-      acc[tag] = (acc[tag] || 0) + 1;
-      return acc;
-    }, {});
-
-    const topTag = Object.entries(tagFrequency)
-      .sort((a, b) => b[1] - a[1])[0][0];
-
-    const fallback = await db.collection('passionProfiles').findOne({
-      tags: topTag
-    }) || DEFAULT_PASSION_PROFILES[0];
-
-    res.status(200).json(fallback);
+    // Ultra-light fallback
+    const fallback = DEFAULT_PASSION_PROFILES.find(p => 
+      p.category === 'environment'
+    ) || DEFAULT_PASSION_PROFILES[0];
+    
+    return res.status(200).json(fallback);
   }
 });
 

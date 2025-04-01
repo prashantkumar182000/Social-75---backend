@@ -172,13 +172,16 @@ const initializePassionData = async () => {
 
 app.post('/api/pusher/auth', async (req, res) => {
   try {
-    const auth = pusher.authenticate(req.body.socket_id, req.body.channel_name);
-    res.send(auth);
+    const socketId = req.body.socket_id;
+    const channel = req.body.channel_name;
+    const authResponse = pusher.authenticate(socketId, channel);
+    res.send(authResponse);
   } catch (err) {
     res.status(403).send('Forbidden');
   }
 });
 
+// Message Endpoints
 app.get('/api/messages', async (req, res) => {
   try {
     const { channel } = req.query;
@@ -191,7 +194,7 @@ app.get('/api/messages', async (req, res) => {
 
     res.status(200).json(messages);
   } catch (err) {
-    res.status(500).json({ success: false, message: 'Failed to fetch messages' });
+    res.status(500).json({ error: 'Failed to fetch messages' });
   }
 });
 
@@ -199,11 +202,8 @@ app.post('/api/messages', async (req, res) => {
   try {
     const { text, channel, user, replyTo } = req.body;
     
-    if (!text || !channel || !user) {
-      return res.status(400).json({ 
-        success: false, 
-        message: 'Missing required fields' 
-      });
+    if (!text || !channel || !user?.uid) {
+      return res.status(400).json({ error: 'Missing required fields' });
     }
 
     const newMessage = {
@@ -221,9 +221,10 @@ app.post('/api/messages', async (req, res) => {
 
     res.status(201).json(insertedMessage);
   } catch (err) {
-    res.status(500).json({ success: false, message: 'Failed to send message' });
+    res.status(500).json({ error: 'Failed to send message' });
   }
 });
+
 
 // ================== PASSION FINDER ENDPOINTS ================== //
 

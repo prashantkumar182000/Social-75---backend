@@ -1,39 +1,37 @@
-require('dotenv').config(); // Load environment variables from .env
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const bodyParser = require('body-parser');
+const { MongoClient, ObjectId } = require('mongodb');
 const Pusher = require('pusher');
-const { MongoClient } = require('mongodb');
 const axios = require('axios');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// MongoDB connection string
+// MongoDB configuration
 const mongoUri = process.env.MONGO_URI || 'mongodb+srv://prashantkumar182000:pk00712345@cluster0.tehdo.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0&tls=true&tlsAllowInvalidCertificates=true';
-const dbName = 'chatApp'; // Database name
-const collectionName = 'messages'; // Collection name
+const dbName = 'chatApp';
 
-app.use(express.json()); // Parse JSON bodies
-app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 app.use(cors({
   origin: ['http://localhost:5173', 'https://socio-99-frontend.vercel.app', 'https://social-75.vercel.app/'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true  // Add this line
+  credentials: true
 }));
 
-// Initialize Pusher
+// Pusher configuration
 const pusher = new Pusher({
-  appId: process.env.PUSHER_APP_ID || '1962195', // Use environment variable or fallback
-  key: process.env.PUSHER_KEY || 'b499431d9b73ef39d7a6', // Use environment variable or fallback
-  secret: process.env.PUSHER_SECRET || '696fa215743b578ca737', // Use environment variable or fallback
+  appId: process.env.PUSHER_APP_ID || '1962195',
+  key: process.env.PUSHER_KEY || 'b499431d9b73ef39d7a6',
+  secret: process.env.PUSHER_SECRET || '696fa215743b578ca737',
   cluster: 'ap2',
   useTLS: true,
 });
 
-// Connect to MongoDB
+// MongoDB connection
 let db;
 const connectToMongoDB = async () => {
   try {
@@ -45,218 +43,277 @@ const connectToMongoDB = async () => {
     console.log('Connected to MongoDB');
     db = client.db(dbName);
 
-    // Ensure the mapData collection exists
+    // Create indexes
     await db.collection('mapData').createIndex({ location: '2dsphere' });
+    await db.collection('connections').createIndex({ userId: 1 });
+    await db.collection('connections').createIndex({ connectedUserId: 1 });
+    await db.collection('messages').createIndex({ timestamp: 1 });
+    
   } catch (err) {
-    console.error('Failed to connect to MongoDB:', err);
-    process.exit(1); // Exit the process if MongoDB connection fails
+    console.error('MongoDB connection failed:', err);
+    process.exit(1);
   }
 };
 
-// TED Talks API Configuration
-const TED_API_KEY = process.env.TED_API_KEY || '12a5ce8dcamshf1e298383db9dd5p1d32bfjsne685c7209647'; // Your RapidAPI key
-const TED_API_HOST = process.env.TED_API_HOST || 'ted-talks-api.p.rapidapi.com';
-
-// Fetch TED Talks data
-const fetchTEDTalks = async () => {
-  try {
-    const response = await axios.get('https://ted-talks-api.p.rapidapi.com/talks', {
-      params: {
-        from_record_date: '2017-01-01',
-        min_duration: '300',
-        audio_lang: 'en',
-        subtitle_lang: 'he',
-        speaker: 'yuval_noah_harari',
-        topic: 'politics',
-      },
-      headers: {
-        'x-rapidapi-key': TED_API_KEY,
-        'x-rapidapi-host': TED_API_HOST,
-      },
-    });
-
-    // Extract the results array from the API response
-    const talks = response.data.result.results.map((talk) => ({
-      id: talk.id,
-      title: talk.title,
-      type: 'Video',
-      description: talk.description,
-      duration: talk.duration,
-      speaker: talk.speaker,
-      thumbnail: talk.thumbnail,
-      url: talk.url,
-    }));
-
-    // Update MongoDB collection
-    await db.collection('tedTalks').deleteMany({});
-    await db.collection('tedTalks').insertMany(talks);
-    console.log('TED Talks data refreshed successfully');
-  } catch (err) {
-    console.error('Failed to fetch TED Talks:', err);
-  }
-};
-
-// NGO Data Fetching
-const refreshNGOData = async () => {
-  try {
-    const response = await axios.get(
-      'https://projects.propublica.org/nonprofits/api/v2/search.json?q=environment',
-    );
-    const ngos = response.data.organizations.map((org) => ({
-      id: org.ein, // Use EIN as unique ID
-      name: org.name,
-      type: 'NGO',
-      description: org.ntee_code || 'No description available',
-      website: org.website || 'Not available',
-      location: `${org.city}, ${org.state}`, // Combine city and state
-      mission: org.ntee_classification || 'No mission statement available',
-    }));
-
-    // Update MongoDB collection
-    await db.collection('ngos').deleteMany({});
-    await db.collection('ngos').insertMany(ngos);
-    console.log('NGO data refreshed successfully');
-  } catch (err) {
-    console.error('NGO refresh failed:', err);
-  }
-};
-
+// API endpoints
 app.get('/api/health', (req, res) => {
   res.status(200).json({ status: 'OK' });
 });
 
-// Endpoint to fetch map data
+// Map Data endpoints
 app.get('/api/map', async (req, res) => {
   try {
     const mapData = await db.collection('mapData').find().toArray();
     res.status(200).json(mapData);
   } catch (err) {
-    console.error('Failed to fetch map data:', err);
     res.status(500).json({ success: false, message: 'Failed to fetch map data' });
   }
 });
 
-// Endpoint to add a new location to the map
 app.post('/api/map', async (req, res) => {
-  const { location, interest, category } = req.body;
-
-  if (!location || !interest || !category) {
-    return res.status(400).json({ success: false, message: 'Missing required fields' });
-  }
-
   try {
+    const { location, interest, category } = req.body;
     const newLocation = {
       location,
       interest,
       category,
       timestamp: new Date().toISOString()
     };
-
     await db.collection('mapData').insertOne(newLocation);
-    res.status(201).json({ success: true, message: 'Location added successfully', data: newLocation });
+    res.status(201).json({ success: true, data: newLocation });
   } catch (err) {
-    console.error('Failed to add location:', err);
     res.status(500).json({ success: false, message: 'Failed to add location' });
   }
 });
 
-// Pusher endpoint for sending messages
-app.post('/api/send-message', async (req, res) => {
-  // Add validation
-  if (!req.body || !req.body.text || !req.body.user) {
-    return res.status(400).json({ 
-      success: false, 
-      message: 'Missing required fields: text and user' 
-    });
-  }
-
-  const message = {
-    text: req.body.text,
-    user: req.body.user,
-    timestamp: new Date().toISOString() // Add server-side timestamp
-  };
-
+// Connection endpoints
+app.post('/api/connections', async (req, res) => {
   try {
-    const result = await db.collection(collectionName).insertOne(message);
-    console.log('Message saved with ID:', result.insertedId);
+    const { userId, connectedUserId } = req.body;
     
-    pusher.trigger('chat', 'message', message, (err) => {
-      if (err) {
-        console.error('Pusher error:', err);
-        return res.status(500).json({ 
-          success: false, 
-          message: 'Message saved but Pusher failed' 
-        });
-      }
-      res.status(200).json({ 
-        success: true, 
-        message: 'Message sent',
-        id: result.insertedId 
+    const existingConnection = await db.collection('connections').findOne({
+      $or: [
+        { userId, connectedUserId },
+        { userId: connectedUserId, connectedUserId: userId }
+      ]
+    });
+
+    if (existingConnection) {
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Connection already exists' 
       });
+    }
+
+    const newConnection = {
+      userId,
+      connectedUserId,
+      status: 'pending',
+      timestamp: new Date().toISOString()
+    };
+
+    const result = await db.collection('connections').insertOne(newConnection);
+    
+    pusher.trigger(`user-${connectedUserId}`, 'connection', {
+      type: 'request',
+      connection: { ...newConnection, _id: result.insertedId }
+    });
+
+    res.status(201).json({ 
+      success: true, 
+      connection: { ...newConnection, _id: result.insertedId }
     });
   } catch (err) {
-    console.error('Database error:', err);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Database operation failed' 
-    });
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
-// Endpoint to fetch all messages
+app.put('/api/connections/:id', async (req, res) => {
+  try {
+    const { status } = req.body;
+    const { id } = req.params;
+
+    const connection = await db.collection('connections').findOne({ 
+      _id: new ObjectId(id) 
+    });
+    
+    if (!connection) {
+      return res.status(404).json({ success: false, message: 'Connection not found' });
+    }
+
+    const updatedConnection = {
+      ...connection,
+      status,
+      updatedAt: new Date().toISOString()
+    };
+
+    await db.collection('connections').updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updatedConnection }
+    );
+
+    // Notify both users
+    [connection.userId, connection.connectedUserId].forEach(userId => {
+      pusher.trigger(`user-${userId}`, 'connection', {
+        type: 'update',
+        connection: updatedConnection
+      });
+    });
+
+    res.status(200).json({ success: true, connection: updatedConnection });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+app.get('/api/users/:userId/connections', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    
+    const connections = await db.collection('connections').find({
+      $or: [{ userId }, { connectedUserId: userId }]
+    }).toArray();
+
+    // Enrich with user data
+    const enrichedConnections = await Promise.all(
+      connections.map(async conn => {
+        const [user, connectedUser] = await Promise.all([
+          db.collection('users').findOne({ _id: new ObjectId(conn.userId) }),
+          db.collection('users').findOne({ _id: new ObjectId(conn.connectedUserId) })
+        ]);
+        return { ...conn, user, connectedUser };
+      })
+    );
+
+    res.status(200).json(enrichedConnections);
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
+
+// Chat endpoints
+app.post('/api/send-message', async (req, res) => {
+  try {
+    const { text, user } = req.body;
+    const message = {
+      text,
+      user,
+      timestamp: new Date().toISOString()
+    };
+
+    const result = await db.collection('messages').insertOne(message);
+    pusher.trigger('chat', 'message', message);
+    res.status(200).json({ success: true, message: 'Message sent' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Failed to send message' });
+  }
+});
+
 app.get('/api/messages', async (req, res) => {
   try {
-    const messages = await db.collection(collectionName).find().toArray();
+    const messages = await db.collection('messages').find().toArray();
     res.status(200).json(messages);
   } catch (err) {
-    console.error('Failed to fetch messages:', err);
     res.status(500).json({ success: false, message: 'Failed to fetch messages' });
   }
 });
 
-// Endpoint to fetch TED Talks
+// Content endpoints
+const TED_API_KEY = process.env.TED_API_KEY || '12a5ce8dcamshf1e298383db9dd5p1d32bfjsne685c7209647';
+const TED_API_HOST = process.env.TED_API_HOST || 'ted-talks-api.p.rapidapi.com';
+
 app.get('/api/content', async (req, res) => {
   try {
     const talks = await db.collection('tedTalks').find().toArray();
     res.status(200).json(talks);
   } catch (err) {
-    console.error('Failed to fetch TED Talks:', err);
     res.status(500).json({ success: false, message: 'Failed to fetch content' });
   }
 });
 
-// Endpoint to fetch NGO data
+// NGO endpoints
 app.get('/api/action-hub', async (req, res) => {
   try {
     const ngos = await db.collection('ngos').find().toArray();
     res.status(200).json(ngos);
   } catch (err) {
-    console.error('Failed to fetch NGOs:', err);
     res.status(500).json({ success: false, message: 'Failed to fetch NGOs' });
   }
 });
 
-// Start the server and initialize data
-const startServer = async () => {
+// Data refresh functions
+const refreshTEDTalks = async () => {
   try {
-    await connectToMongoDB();
-    await fetchTEDTalks();
-    await refreshNGOData();
-
-    setInterval(fetchTEDTalks, 3600000);
-    setInterval(refreshNGOData, 3600000);
-
-    app.listen(PORT, '0.0.0.0', () => {
-      console.log(`Server is running on http://0.0.0.0:${PORT}`);
-    }).on('error', (err) => {
-      console.error('Server error:', err);
-      process.exit(1); // Exit if port is in use
+    const response = await axios.get('https://ted-talks-api.p.rapidapi.com/talks', {
+      headers: {
+        'x-rapidapi-key': TED_API_KEY,
+        'x-rapidapi-host': TED_API_HOST
+      },
+      params: {
+        from_record_date: '2017-01-01',
+        min_duration: '300',
+        audio_lang: 'en'
+      }
     });
+
+    const talks = response.data.result.results.map(talk => ({
+      id: talk.id,
+      title: talk.title,
+      description: talk.description,
+      duration: talk.duration,
+      speaker: talk.speaker,
+      url: talk.url,
+      thumbnail: talk.thumbnail
+    }));
+
+    await db.collection('tedTalks').deleteMany({});
+    await db.collection('tedTalks').insertMany(talks);
+    console.log('TED Talks updated');
   } catch (err) {
-    console.error('Startup error:', err);
-    process.exit(1);
+    console.error('TED Talks refresh failed:', err.message);
   }
 };
 
-// Start the server
+const refreshNGOs = async () => {
+  try {
+    const response = await axios.get(
+      'https://projects.propublica.org/nonprofits/api/v2/search.json?q=environment'
+    );
+    
+    const ngos = response.data.organizations.map(org => ({
+      id: org.ein,
+      name: org.name,
+      mission: org.ntee_classification || 'No mission available',
+      location: `${org.city}, ${org.state}`,
+      website: org.website || '',
+      category: 'environment'
+    }));
+
+    await db.collection('ngos').deleteMany({});
+    await db.collection('ngos').insertMany(ngos);
+    console.log('NGO data updated');
+  } catch (err) {
+    console.error('NGO refresh failed:', err.message);
+  }
+};
+
+// Server startup
+const startServer = async () => {
+  await connectToMongoDB();
+  
+  // Initial data load
+  await Promise.all([refreshTEDTalks(), refreshNGOs()]);
+  
+  // Scheduled refreshes
+  setInterval(refreshTEDTalks, 3600000); // 1 hour
+  setInterval(refreshNGOs, 3600000); // 1 hour
+
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on port ${PORT}`);
+  }).on('error', err => {
+    console.error('Server error:', err);
+    process.exit(1);
+  });
+};
+
 startServer();

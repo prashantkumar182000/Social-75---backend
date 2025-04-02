@@ -15,13 +15,30 @@ const dbName = 'chatApp';
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-app.use(cors({
-  origin: ['http://localhost:5173', 'https://socio-99-frontend.vercel.app', 'https://social-75.vercel.app/'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true,
-   exposedHeaders: ['Content-Length', 'X-Request-Id']
-}));
+app.use((req, res, next) => {
+  const allowedOrigins = [
+    'http://localhost:5173',
+    'https://socio-99-frontend.vercel.app',
+    'https://social-75.vercel.app'
+  ];
+  const origin = req.headers.origin;
+  
+  if (allowedOrigins.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+  }
+  
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, Cache-Control');
+  res.header('Access-Control-Expose-Headers', 'Content-Length, X-Request-Id');
+  res.header('Access-Control-Allow-Credentials', 'true');
+  
+  // Handle preflight requests
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+  
+  next();
+});
 
 // Pusher configuration
 const pusher = new Pusher({
@@ -503,10 +520,16 @@ const refreshTEDTalks = async () => {
 
 app.get('/api/content', async (req, res) => {
   try {
+    const collectionExists = await db.listCollections({ name: 'tedTalks' }).hasNext();
+    if (!collectionExists) {
+      return res.status(200).json(dummyTalks); // Fallback to dummy data
+    }
+
     const talks = await db.collection('tedTalks').find().toArray();
-    res.status(200).json(talks);
+    res.status(200).json(talks.length ? talks : dummyTalks);
   } catch (err) {
-    res.status(500).json({ success: false, message: 'Failed to fetch content' });
+    console.error('Content fetch error:', err);
+    res.status(200).json(dummyTalks); // Fallback to dummy data
   }
 });
 

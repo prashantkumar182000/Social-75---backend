@@ -19,7 +19,7 @@ app.use((req, res, next) => {
   const allowedOrigins = [
     'http://localhost:5173',
     'https://socio-99-frontend.vercel.app',
-    'https://social-75.vercel.app'
+    'https://soc-ial75.netlify.app'
   ];
   const origin = req.headers.origin;
   

@@ -12,15 +12,57 @@ const PORT = process.env.PORT || 10000;
 const mongoUri = process.env.MONGO_URI || 'mongodb+srv://prashantkumar182000:pk00712345@cluster0.tehdo.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0&tls=true&tlsAllowInvalidCertificates=true';
 const dbName = 'chatApp';
 
+// Middleware setup
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Security headers middleware
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('X-XSS-Protection', '1; mode=block');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('Vary', 'Origin');
+  next();
+});
+
+// CORS configuration
 app.use(cors({
-  origin: ['http://localhost:5173', 'https://socio-99-frontend.vercel.app', 'https://social-75.vercel.app/'],
+  origin: [
+    'http://localhost:5173',
+    'https://socio-99-frontend.vercel.app',
+    'https://social-75.vercel.app'
+  ],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
+  credentials: true,
+  exposedHeaders: ['Content-Length', 'X-Request-Id']
 }));
+
+// Enhanced CORS handling
+app.use((req, res, next) => {
+  const allowedOrigins = [
+    'http://localhost:5173',
+    'https://socio-99-frontend.vercel.app',
+    'https://social-75.vercel.app'
+  ];
+  
+  const origin = req.headers.origin;
+  if (allowedOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+  }
+  
+  res.header('Access-Control-Allow-Credentials', 'true');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 
+    'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+  
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  
+  next();
+});
 
 // Pusher configuration
 const pusher = new Pusher({
@@ -503,9 +545,15 @@ const refreshTEDTalks = async () => {
 app.get('/api/content', async (req, res) => {
   try {
     const talks = await db.collection('tedTalks').find().toArray();
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.setHeader('Content-Type', 'application/json');
     res.status(200).json(talks);
   } catch (err) {
-    res.status(500).json({ success: false, message: 'Failed to fetch content' });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch content',
+      error: err.message 
+    });
   }
 });
 
@@ -537,14 +585,35 @@ const refreshNGOs = async () => {
 app.get('/api/action-hub', async (req, res) => {
   try {
     const ngos = await db.collection('ngos').find().toArray();
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.setHeader('Content-Type', 'application/json');
     res.status(200).json(ngos);
   } catch (err) {
-    res.status(500).json({ success: false, message: 'Failed to fetch NGOs' });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch NGOs',
+      error: err.message 
+    });
   }
 });
 
-// ================== SERVER STARTUP ================== //
 
+// ================== ERROR HANDLING ================== //
+app.use((err, req, res, next) => {
+  console.error('Server Error:', {
+    path: req.path,
+    method: req.method,
+    error: err.stack || err
+  });
+
+  res.status(500).json({
+    success: false,
+    message: 'Internal server error',
+    error: process.env.NODE_ENV === 'development' ? err.message : undefined
+  });
+});
+
+// ================== SERVER STARTUP ================== //
 const startServer = async () => {
   await connectToMongoDB();
   await initializePassionData();

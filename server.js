@@ -525,41 +525,33 @@ app.get('/api/users/:userId/connections', async (req, res) => {
 // Updated refreshTEDTalks function in server.js
 const refreshTEDTalks = async () => {
   try {
-    // First check if we have recent data (avoid unnecessary API calls)
-    const lastUpdated = await db.collection('tedTalks').findOne({}, {
-      sort: { _id: -1 },
-      projection: { updatedAt: 1 }
-    });
-    
-    // Only refresh if data is older than 24 hours
-    if (lastUpdated && new Date() - new Date(lastUpdated.updatedAt) < 86400000) {
-      console.log('Skipping TED Talks refresh (recent data exists)');
-      return;
-    }
-
     const response = await axios.get('https://ted-talks-api.p.rapidapi.com/talks', {
       headers: {
-        'X-RapidAPI-Key': process.env.RAPIDAPI_KEY, // Always use env variables
-        'X-RapidAPI-Host': 'ted-talks-api.p.rapidapi.com'
+        'x-rapidapi-key': process.env.TED_API_KEY || '12a5ce8dcamshf1e298383db9dd5p1d32bfjsne685c7209647',
+        'x-rapidapi-host': process.env.TED_API_HOST || 'ted-talks-api.p.rapidapi.com'
       },
       params: {
-        limit: '50', // Reduce number of results
-        sort: 'newest', // Get most recent talks first
-        fields: 'title,description,speaker,duration,url,thumbnail' // Only needed fields
-      },
-      timeout: 10000 // Fail fast if API is slow
+        from_record_date: '2017-01-01',
+        min_duration: '300',
+        audio_lang: 'en'
+      }
     });
 
-    const talks = response.data.map(talk => ({
-      ...talk,
-      updatedAt: new Date().toISOString() // Track refresh time
+    const talks = response.data.result.results.map(talk => ({
+      id: talk.id,
+      title: talk.title,
+      description: talk.description,
+      duration: talk.duration,
+      speaker: talk.speaker,
+      url: talk.url,
+      thumbnail: talk.thumbnail
     }));
 
     await db.collection('tedTalks').deleteMany({});
     await db.collection('tedTalks').insertMany(talks);
-    console.log('TED Talks updated successfully');
+    console.log('TED Talks updated');
   } catch (err) {
-    console.error('TED Talks refresh failed:', err.response?.data?.message || err.message);
+    console.error('TED Talks refresh failed:', err.message);
   }
 };
 

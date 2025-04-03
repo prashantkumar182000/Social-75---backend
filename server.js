@@ -5,7 +5,6 @@ const { MongoClient, ObjectId } = require('mongodb');
 const Pusher = require('pusher');
 const axios = require('axios');
 const rateLimit = require('express-rate-limit');
-const { dummyTalks } = require('./utils/dummyData');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -561,53 +560,69 @@ const refreshTEDTalks = async () => {
     console.log('TED Talks updated successfully');
   } catch (err) {
     console.error('TED Talks refresh failed:', err.response?.data?.message || err.message);
-    
-    // Fallback to dummy data if API fails
-    if (!await db.collection('tedTalks').countDocuments()) {
-      await db.collection('tedTalks').insertMany(dummyTalks);
-      console.log('Loaded fallback TED Talks data');
-    }
   }
 };
 
-// Updated content endpoint
 app.get('/api/content', async (req, res) => {
   try {
     let talks = [];
     
-    // Try database first
+    // 1. Try database first
     try {
       talks = await db.collection('tedTalks')
         .find()
         .sort({ updatedAt: -1 })
         .limit(50)
         .toArray();
-    } catch (dbError) {
-      console.error('Database fetch failed, using API fallback:', dbError);
-    }
-
-    // If no DB results, try API
-    if (talks.length === 0) {
-      try {
-        const apiResponse = await axios.get('https://ted-talks-api.p.rapidapi.com/talks', {
-          headers: {
-            'X-RapidAPI-Key': process.env.RAPIDAPI_KEY,
-            'X-RapidAPI-Host': 'ted-talks-api.p.rapidapi.com'
-          },
-          params: { limit: '20' },
-          timeout: 5000
-        });
-        talks = apiResponse.data;
-      } catch (apiError) {
-        console.error('API fetch failed, using dummy data:', apiError);
-        talks = dummyTalks; // Final fallback
+        
+      if (talks.length > 0) {
+        return res.json(talks); // Return immediately if DB has data
       }
+    } catch (dbError) {
+      console.error('Database fetch failed:', dbError);
+      // Continue to API fallback
     }
 
-    res.json(talks);
+    // 2. Try RapidAPI if DB is empty
+    try {
+      const apiResponse = await axios.get('https://ted-talks-api.p.rapidapi.com/talks', {
+        headers: {
+          'X-RapidAPI-Key': process.env.RAPIDAPI_KEY,
+          'X-RapidAPI-Host': 'ted-talks-api.p.rapidapi.com'
+        },
+        params: { 
+          limit: '20',
+          sort: 'newest',
+          fields: 'title,description,speaker,duration,url,thumbnail'
+        },
+        timeout: 5000
+      });
+
+      // Transform API response to match your schema
+      talks = apiResponse.data.map(talk => ({
+        title: talk.title,
+        speaker: talk.speaker || 'Unknown Speaker',
+        duration: talk.duration || 0,
+        description: talk.description || '',
+        url: talk.url,
+        thumbnail: talk.thumbnail,
+        updatedAt: new Date().toISOString()
+      }));
+
+      // Cache the API results in DB
+      if (talks.length > 0) {
+        await db.collection('tedTalks').insertMany(talks);
+      }
+      
+      return res.json(talks);
+    } catch (apiError) {
+      console.error('API fetch failed:', apiError);
+      return res.status(200).json([]); // Return empty array instead of dummy data
+    }
+    
   } catch (err) {
     console.error('Content endpoint error:', err);
-    res.status(200).json(dummyTalks); // Ensure response even if everything fails
+    res.status(200).json([]); // Final fallback (empty array)
   }
 });
 

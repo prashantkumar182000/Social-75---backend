@@ -4,6 +4,8 @@ const cors = require('cors');
 const { MongoClient, ObjectId } = require('mongodb');
 const Pusher = require('pusher');
 const axios = require('axios');
+const rateLimit = require('express-rate-limit');
+const { dummyTalks } = require('./utils/dummyData');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -19,7 +21,7 @@ app.use((req, res, next) => {
   const allowedOrigins = [
     'http://localhost:5173',
     'https://socio-99-frontend.vercel.app',
-    'https://social-75.vercel.app'
+    'https://soc-ial75.netlify.app'
   ];
   const origin = req.headers.origin;
   
@@ -39,6 +41,25 @@ app.use((req, res, next) => {
   
   next();
 });
+
+// Add request logging middleware
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  next();
+});
+
+// ================== RATE LIMITING ================== //
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per window
+  message: 'Too many requests from this IP, please try again later',
+  standardHeaders: true, // Return rate limit info in headers
+  legacyHeaders: false // Disable deprecated headers
+});
+
+// Apply to all API routes
+app.use('/api/', apiLimiter);
+// ================== RATE LIMITING ================== //
 
 // Pusher configuration
 const pusher = new Pusher({
@@ -190,12 +211,29 @@ const initializePassionData = async () => {
 
 app.post('/api/pusher/auth', async (req, res) => {
   try {
-    const socketId = req.body.socket_id;
-    const channel = req.body.channel_name;
-    const authResponse = pusher.authenticate(socketId, channel);
-    res.send(authResponse);
+    const { socket_id: socketId, channel_name: channel } = req.body;
+    
+    // Validate required fields
+    if (!socketId || !channel) {
+      return res.status(400).json({ error: 'Missing socket_id or channel_name' });
+    }
+
+    // Additional security check (optional)
+    const userId = req.user?.id; // Assuming you have user auth
+    if (channel.startsWith('private-') && !userId) {
+      return res.status(403).json({ error: 'Unauthorized private channel access' });
+    }
+
+    // Generate auth response
+    const authResponse = pusher.authorizeChannel(socketId, channel, {
+      user_id: userId?.toString(), // For presence channels
+      user_info: userId ? { id: userId } : {} // Additional user data
+    });
+
+    res.json(authResponse);
   } catch (err) {
-    res.status(403).send('Forbidden');
+    console.error('Pusher auth failed:', err);
+    res.status(403).json({ error: 'Forbidden', details: err.message });
   }
 });
 
@@ -287,9 +325,8 @@ app.post('/api/analyze-passion', async (req, res) => {
       }
     });
 
-    const sortedTags = Object.keys(tagFrequency).sort(
-      (a, b) => tagFrequency[b] - tagFrequency[a]
-    );
+    // Removed unused variable 'sortedTags'
+    Object.keys(tagFrequency).sort((a, b) => tagFrequency[b] - tagFrequency[a]);
 
     const profiles = await db.collection('passionProfiles').find().toArray();
     
@@ -486,50 +523,91 @@ app.get('/api/users/:userId/connections', async (req, res) => {
 
 // ================== CONTENT ENDPOINTS ================== //
 
+// Updated refreshTEDTalks function in server.js
 const refreshTEDTalks = async () => {
   try {
+    // First check if we have recent data (avoid unnecessary API calls)
+    const lastUpdated = await db.collection('tedTalks').findOne({}, {
+      sort: { _id: -1 },
+      projection: { updatedAt: 1 }
+    });
+    
+    // Only refresh if data is older than 24 hours
+    if (lastUpdated && new Date() - new Date(lastUpdated.updatedAt) < 86400000) {
+      console.log('Skipping TED Talks refresh (recent data exists)');
+      return;
+    }
+
     const response = await axios.get('https://ted-talks-api.p.rapidapi.com/talks', {
       headers: {
-        'x-rapidapi-key': process.env.TED_API_KEY || '12a5ce8dcamshf1e298383db9dd5p1d32bfjsne685c7209647',
-        'x-rapidapi-host': process.env.TED_API_HOST || 'ted-talks-api.p.rapidapi.com'
+        'X-RapidAPI-Key': process.env.RAPIDAPI_KEY, // Always use env variables
+        'X-RapidAPI-Host': 'ted-talks-api.p.rapidapi.com'
       },
       params: {
-        from_record_date: '2017-01-01',
-        min_duration: '300',
-        audio_lang: 'en'
-      }
+        limit: '50', // Reduce number of results
+        sort: 'newest', // Get most recent talks first
+        fields: 'title,description,speaker,duration,url,thumbnail' // Only needed fields
+      },
+      timeout: 10000 // Fail fast if API is slow
     });
 
-    const talks = response.data.result.results.map(talk => ({
-      id: talk.id,
-      title: talk.title,
-      description: talk.description,
-      duration: talk.duration,
-      speaker: talk.speaker,
-      url: talk.url,
-      thumbnail: talk.thumbnail
+    const talks = response.data.map(talk => ({
+      ...talk,
+      updatedAt: new Date().toISOString() // Track refresh time
     }));
 
     await db.collection('tedTalks').deleteMany({});
     await db.collection('tedTalks').insertMany(talks);
-    console.log('TED Talks updated');
+    console.log('TED Talks updated successfully');
   } catch (err) {
-    console.error('TED Talks refresh failed:', err.message);
+    console.error('TED Talks refresh failed:', err.response?.data?.message || err.message);
+    
+    // Fallback to dummy data if API fails
+    if (!await db.collection('tedTalks').countDocuments()) {
+      await db.collection('tedTalks').insertMany(dummyTalks);
+      console.log('Loaded fallback TED Talks data');
+    }
   }
 };
 
+// Updated content endpoint
 app.get('/api/content', async (req, res) => {
   try {
-    const collectionExists = await db.listCollections({ name: 'tedTalks' }).hasNext();
-    if (!collectionExists) {
-      return res.status(200).json(dummyTalks); // Fallback to dummy data
+    let talks = [];
+    
+    // Try database first
+    try {
+      talks = await db.collection('tedTalks')
+        .find()
+        .sort({ updatedAt: -1 })
+        .limit(50)
+        .toArray();
+    } catch (dbError) {
+      console.error('Database fetch failed, using API fallback:', dbError);
     }
 
-    const talks = await db.collection('tedTalks').find().toArray();
-    res.status(200).json(talks.length ? talks : dummyTalks);
+    // If no DB results, try API
+    if (talks.length === 0) {
+      try {
+        const apiResponse = await axios.get('https://ted-talks-api.p.rapidapi.com/talks', {
+          headers: {
+            'X-RapidAPI-Key': process.env.RAPIDAPI_KEY,
+            'X-RapidAPI-Host': 'ted-talks-api.p.rapidapi.com'
+          },
+          params: { limit: '20' },
+          timeout: 5000
+        });
+        talks = apiResponse.data;
+      } catch (apiError) {
+        console.error('API fetch failed, using dummy data:', apiError);
+        talks = dummyTalks; // Final fallback
+      }
+    }
+
+    res.json(talks);
   } catch (err) {
-    console.error('Content fetch error:', err);
-    res.status(200).json(dummyTalks); // Fallback to dummy data
+    console.error('Content endpoint error:', err);
+    res.status(200).json(dummyTalks); // Ensure response even if everything fails
   }
 });
 
